@@ -1,0 +1,191 @@
+---
+title: "Project Assignment 01"
+author: "Cleyton Farias"
+#date: "August 27, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, comment = "")
+```
+
+For the analysis, I will use the **data.table** and **dplyr** packages. 
+
+```{r}
+library(data.table)
+library(dplyr)
+foo <- fread("./activity.csv")
+```
+
+Using the **lubridate** package to work with date variable:
+
+```{r}
+library(lubridate)
+foo <- foo %>% 
+    mutate(date = ymd(date)) %>% 
+    as.data.table()
+```
+
+
+I will use the **ggplot2** package to plot a histogram of the total number of steps
+taken each day:
+
+```{r, warning = FALSE, fig.align='center'}
+library(ggplot2)
+qplot(data = foo[, .(total_steps = sum(steps)), by = "date"], 
+      x = total_steps, 
+      geom = c("histogram"))
+```
+
+
+Next, let's take the mean and median of the number of steps taken each day. As 
+there are days with no recorded number of steps, I will omit days with *NA*:
+
+
+```{r}
+steps_per_day <- foo[, .(total = sum(steps)), by = "date"] %>% 
+    summarize(mean = mean(total, na.rm = T),
+              median = median(total, na.rm = T))
+steps_per_day
+```
+
+According to previous results, the average/median steps taken per day was almost 
+the same. 
+
+
+
+Now, let's plot a time series of the average number of steps taken  in the 5-minute
+interval:
+
+```{r, fig.align='center', fig.width=10}
+library(stringr)
+library(hms)
+
+foo <- foo %>% 
+    mutate(interval = str_pad(as.character(interval), width = 4, side = "left", pad = "0")) %>% 
+    as.data.table()
+
+foo <- foo %>% 
+    mutate(interval = paste(str_sub(interval, 1, 2), str_sub(interval, 3, 4), sep = ":"))%>% 
+    as.data.table()
+
+foo <- foo %>% 
+    mutate(interval = hms::parse_hm(interval)) %>% 
+    as.data.table()
+
+foo[, .(mean = mean(steps, na.rm = T)), by = .(interval)] %>% 
+    mutate(interval = as_datetime(interval)) %>% 
+    ggplot(data = ., aes(x = interval, y = mean)) + 
+    geom_point() + geom_line() + 
+    scale_x_datetime(breaks = scales::date_breaks("1 hour"),
+                     date_labels = "%H:%M")
+                    
+
+```
+
+As we can see from the previous plot, in average people seem to walk more during 
+8-10h in the morning. 
+Let's find the 5-minute interval that, on average, contains the maximum number of steps,
+
+```{r}
+foo[, .(mean = mean(steps, na.rm = T)), by = .(interval)] %>% 
+    arrange(-mean) %>% 
+    as.data.table %>% 
+    head(1)
+```
+
+That is it. Around 8:30 is the time the people walk more in average. 
+
+
+
+## Missing Values:
+
+Missing values is an issue in this data set. Let's see the how many rows exist with NA
+values:
+```{r}
+foo[!complete.cases(foo)] %>% nrow
+```
+
+So, from `r nrow(foo)` there are `r foo[!complete.cases(foo)] %>% nrow` rows with NA values. 
+That is around `r round(100*(foo[!complete.cases(foo)] %>% nrow()/nrow(foo)), 1)` percent of the 
+data set.
+
+Now, let's investigate the proportion of *NA* values in each variable:
+```{r}
+prop_NA <- sapply(foo, function(x) mean(is.na(x)))
+prop_NA
+```
+
+
+Let's further investigate the proportion in each day *steps* variable has *NA* 
+value:
+
+```{r}
+prop_NA_by_day <- foo[, .(prop_NA = mean(is.na(steps))), by = .(date)]
+prop_NA_by_day
+```
+
+As we can see, the *NA* values when they appear, appear the whole day.  
+
+To overcome this *NA* problem, let's fill in with the mean of steps over the 
+period:
+
+```{r}
+foo2 = copy(foo)
+foo2[is.na(steps), steps := mean(foo$steps, na.rm = T)]
+foo2
+```
+
+As we can see from the warning messages, as the mean of steps is a float number and 
+steps variable is an integer type, there is an implicit coercion of the float to integer
+inside the data.table. If we wanted not to happen this coercion, we would first transform 
+steps variable to float and then apply the mean imputation. For the purpose of this 
+projejct assignment, I will let it as it is. 
+
+Now, let's see how the mean imputation changed the results we got so far. See the 
+histogram of the total number of steps taken each day after missing values are imputed:
+
+```{r, fig.align='center'}
+foo2[, .(total = sum(steps)), by = "date"] %>% 
+    qplot(data = ., x = total, geom = "histogram")
+```
+
+It does not seem that different, right?
+
+Let's calculate the mean and median total number of steps taken per day and see
+how they differ:
+
+```{r}
+foo2[, .(total = sum(steps)), by = .(date)] %>% 
+    summarize(mean = mean(total), median = median(total))
+```
+
+With the mean imputation, we see that the average and median steps taken per day are
+smaller than before.
+
+
+Now let's investigate if there is any change on the activity pattern between 
+weekdays and weekends.
+
+First, let's create a variable called *type_day* that specify if that date is weekday or
+weekend. Then, we will plot the series for each *type_day*:
+
+```{r, fig.align='center', fig.width=10}
+foo <- foo %>% 
+    mutate(type_day = ifelse(weekdays(date) == "Sunday" | weekdays(date) == "Saturday", "weekend", "weekday")) %>% 
+    as.data.table()
+
+foo[, .(mean = mean(steps, na.rm = T)),  by = .(interval, type_day)] %>% 
+    mutate(interval = as_datetime(interval)) %>% 
+    ggplot(data = ., aes(x = interval, y = mean)) +
+    geom_line() + geom_point() + 
+    facet_grid(rows = vars(type_day)) + 
+    scale_x_datetime(breaks = scales::date_breaks("1 hour"),
+                     date_labels = "%H:%M")
+```
+
+From the previous plot, we can that during weekends, people do not seem to take
+much steps during the 6-8 hours in the morning. Also, the average steps taken has 
+a smaller variance during the 8-21h in the weekend compared to week days.
+
+    
